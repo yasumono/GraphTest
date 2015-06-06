@@ -8,59 +8,191 @@ using System.Data;
 using System.Windows.Forms;
 using MathNet.Numerics.Statistics;
 using System.Diagnostics;
-
+using System.Collections;
 
 namespace GraphTest {
     struct OHLC //１銘柄１日分のデータ
     {
         public DateTime date;
-        public int open;
-        public int close;
-        public int high;
-        public int low;
-        public int adj_close;
+        public double open;
+        public double close;
+        public double high;
+        public double low;
+        public double adj_close;
         public int volume;
 
-        public double logReturn;
+        public double[] ma;
+        public double logReturn; //対数差収益率の計算には時系列でのデータが必要
+        public double TR;
+        public double[] ATR;
+
+        public OHLC(DateTime date, double open, double high, double low, double close,
+            double adj_close, int volume) {
+
+            this.date = date;
+            this.open = open;
+            this.high = high;
+            this.low = low;
+            this.close = close;
+            this.adj_close = adj_close;
+            this.volume = volume;
+            ma = new double[3];
+            logReturn = 0.0;
+            TR = 0.0;
+            ATR = new double[1];
+        }
+
+        public OHLC(DateTime date, double open, double high, double low, double close, int volume) {
+
+            this.date = date;
+            this.open = open;
+            this.high = high;
+            this.low = low;
+            this.close = close;
+            this.adj_close = close;
+            this.volume = volume;
+            ma = new double[3];
+            logReturn = 0.0;
+            ATR = new double[1];
+            TR = 0.0;
+        }
+
+        public OHLC(OHLC ob) {
+            this.date = ob.date;
+            this.open = ob.open;
+            this.high = ob.high;
+            this.low = ob.low;
+            this.close = ob.close;
+            this.adj_close = ob.adj_close;
+            this.volume = ob.volume;
+            ma = new double[3];
+            logReturn = 0.0;
+            ATR = new double[1];
+            TR = 0.0;
+
+        }
     }
 
-    class StockData //１銘柄のデータ
+    class OHLCSeries //１銘柄のデータ
     {
         public int corpCode;
-        public OHLC[] data;
+        public OHLC[] data;  //日付は昇順（StockDataMng.Refresh2(date)を参照）
         public int Length { get { return data.Length; } }
 
         //ジェネリック型のために引数なしのコンストラクタを定義
-        public StockData() {
+        public OHLCSeries() {
             corpCode = 0;
             data = null;
         }
 
-        public StockData(int length) {
+        public OHLCSeries(int length) {
             corpCode = 0;
             data = new OHLC[length];
         }
 
-        public void CalcLogReturn() {
-            for (int i = 0; i < data.Length - 1; i++) {
-                data[i].logReturn = Math.Log(data[i].close) - Math.Log(data[i + 1].close);
+        public double[] CalcLogReturn() {
+            //for (int i = 1; i < data.Length; i++) {
+            //    data[i].logReturn = Math.Log(data[i].close) - Math.Log(data[i - 1].close);
+            // }
+
+            for (int n = data.Length - 1; n >= 0; n--) {
+                if (n == data.Length - 1) {
+                    data[n].logReturn = 0.0;
+                    continue;
+                }
+                data[n].logReturn = Math.Log10(data[n].close) - Math.Log10(data[n + 1].close);
+            }
+
+        }
+
+        public void CalcATR(int[] span) {
+            for (int i = 1; i < data.Length; i++) {
+                double[] tr = {data[i].high - data[i].low,
+                              data[i].high-data[i-1].high,
+                              data[i-1].close-data[i].high};
+                data[i].TR = tr.Max();
+            }
+            //ATRを求める…データの足りない端の部分は０埋め
+            for (int l = 0; l < data.Length; l++) { data[l].ATR = new double[span.Length]; }//OHLC.ATR作成
+
+            for (int k = 0; k < span.Length; k++) {
+                double atrsum = 0.0;
+                for (int n = data.Length - 1; n >= 0; n--) {
+                    if (n + span[k] < data.Length) atrsum -= data[n + span[k]].TR;
+                    atrsum += data[n].TR;
+                    data[n].ATR[k] = (n + span[k] <= data.Length) ? atrsum / span[k] : 0.0;
+                }
             }
         }
 
-        public int MaxHigh() {
+        public void CalcMA(int[] span) {
+            for (int l = 0; l < data.Length; l++) { data[l].ma = new double[span.Length]; }//OHLC.ATR作成
+
+            for (int k = 0; k < span.Length; k++) {
+                double masum = 0.0;
+                for (int n = data.Length - 1; n >= 0; n--) {
+                    if (n + span[k] < data.Length) masum -= data[n + span[k]].close;
+                    masum += data[n].close;
+                    data[n].ma[k] = (n + span[k] <= data.Length) ? masum / span[k] : 0.0;
+                }
+            }
+        }
+
+        public double MaxHigh() {
             return (from dd in data.AsEnumerable() select dd.high).Max();
         }
 
-        public int MinLow() {
+        public double MinLow() {
             return (from dd in data.AsEnumerable() select dd.low).Min();
+        }
+
+        public DataTable AsDataTable() {
+            CalcLogReturn();
+            CalcATR(Constant.atrspan);
+            CalcMA(Constant.maspan);
+
+            DataTable dt = new DataTable();
+            DataRow dr;
+            dt.Columns.Add("date", typeof(DateTime));
+            dt.Columns.Add("corpCode", typeof(int));
+            dt.Columns.Add("open", typeof(double));
+            dt.Columns.Add("high", typeof(double));
+            dt.Columns.Add("low", typeof(double));
+            dt.Columns.Add("close", typeof(double));
+            dt.Columns.Add("ma[1]", typeof(double));
+            dt.Columns.Add("logRet", typeof(double));
+            dt.Columns.Add("TR", typeof(double));
+            dt.Columns.Add("ATR", typeof(double));
+
+            for (int i = 0; i < data.Length; i++) {
+                dr = dt.NewRow();
+                dr.BeginEdit();
+                dr[0] = data[i].date;
+                dr[1] = corpCode;
+                dr[2] = data[i].open;
+                dr[3] = data[i].high;
+                dr[4] = data[i].low;
+                dr[5] = data[i].close;
+                dr[6] = data[i].ma[0];
+                dr[7] = data[i].logReturn;
+                dr[8] = data[i].TR;
+                dr[9] = data[i].ATR[0];
+                dt.Rows.Add(dr);
+                dr.EndEdit();
+            }
+            return dt;
+
         }
     }
 
 
 
-    class StockDataCache : DBCache<StockData> //全銘柄のデータ
+    class StockDataCache : DBCache<OHLCSeries> //全銘柄のデータ
     {
-        public override int MakeKey(StockData it) {
+
+        public int Count { get { return base.Count; } }
+
+        public override int MakeKey(OHLCSeries it) {
             return it.corpCode;
         }
     }
@@ -79,6 +211,9 @@ namespace GraphTest {
     }
 
     class CorpInfoCache : DBCache<CorpInfo> {
+
+        public int Count { get { return base.Count; } }
+
         //全銘柄リストのキャッシュを作成する際のキーを設定
         public override int MakeKey(CorpInfo it) {
             return it.corpCode;
@@ -95,13 +230,10 @@ namespace GraphTest {
             String sql = "select * from t_allcorp where corpCode <10000 order by corpCode;";
 
             //一時変数
-
             DataRow dr_temp;
 
             //dt_listに全銘柄リストを取得
             dtCache = SQLManager.SendSQL(sql);
-
-            //if (CorpListManager.Cache == null) CorpListManager.RefreshCache(); 
 
             for (int i = 0; i < dtCache.Rows.Count; i++) {
                 CorpInfo ci_temp = new CorpInfo();
@@ -117,7 +249,6 @@ namespace GraphTest {
 
                 CorpCache.SetData(ci_temp);
             }
-
         }
 
         public static void CalcVoratility(params DateTime[] span) {
@@ -173,7 +304,7 @@ namespace GraphTest {
 
             //各種オブジェクトの作成
             DataTable dt_list = new DataTable();
-            String sql = "select * from t_yahoofdata where (date > '2014-01-01') AND (corpCode <10000);";
+            String sql = "select * from t_yahoofdata where (date > '2014-01-01') AND (corpCode <10000) ;";
 
 
 
@@ -206,7 +337,7 @@ namespace GraphTest {
 
 
 
-                StockData sd_temp = new StockData(dr_rows.Length);//一時変数は銘柄ごとに作り直し
+                OHLCSeries sd_temp = new OHLCSeries(dr_rows.Length);//一時変数は銘柄ごとに作り直し
 
 
 
@@ -216,7 +347,7 @@ namespace GraphTest {
                 for (int i = 0; i < dr_rows.Length; i++) {
                     sd_temp.data[i].date = (DateTime)dr_rows[i]["Date"];
                     sd_temp.data[i].open = Convert.ToInt32(dr_rows[i]["open"]);
-                    sd_temp.data[i].close = Convert.ToInt32(dr_rows[i]["close"]);
+                    sd_temp.data[i].close = Convert.ToInt32(dr_rows[i]["adj_close"]);
                     sd_temp.data[i].high = Convert.ToInt32(dr_rows[i]["high"]);
                     sd_temp.data[i].low = Convert.ToInt32(dr_rows[i]["low"]);
                     sd_temp.data[i].adj_close = Convert.ToInt32(dr_rows[i]["adj_close"]);
@@ -233,7 +364,7 @@ namespace GraphTest {
                 + "ms\nDIC : " + sw_dic.ElapsedMilliseconds + "ms");
         }
 
-        public static void RefreshCache2() {
+        public static void RefreshCache2(System.DateTime Bgn) {
             /////////////////////////////////
             Stopwatch sw_dic = new Stopwatch();
             ///////////////////////
@@ -246,8 +377,8 @@ namespace GraphTest {
             if (CorpListManager.CorpCache.KeyLength() == 0) CorpListManager.RefreshCache(); //CorpListへ企業情報を格納する。
 
             //dt_listに全株価情報を取得
-            String fltr = "where (date > '2014-09-01') AND (corpCode <10000) ";
-            dt_list = SQLManager.SendSQL("select * from t_yahoofdata " + fltr + "GROUP BY corpCode ASC, date DESC;");
+            String fltr = "where (date > '" + Bgn.ToString("yyyy-mm-dd") + "') AND (corpCode <10000) ";
+            dt_list = SQLManager.SendSQL("select * from t_yahoofdata " + fltr + "GROUP BY corpCode ASC, date ASC;");
 
             dt_counts = SQLManager.SendSQL(
                 "SELECT corpCode, COUNT(date) FROM t_yahoofdata " + fltr + " GROUP BY corpCode;");
@@ -263,13 +394,13 @@ namespace GraphTest {
             int startpoint = 0;
             int count = 0;
             foreach (var code in CorpListManager.CorpCache.Keys()) {
-                
+
                 object[] obj_count = (from row in dt_counts.AsEnumerable()
                                       where (int)row[0] == code
                                       select row[1]).ToArray(); //切り取り終了行数を設定
                 count = Convert.ToInt32(obj_count[0]);
 
-////////////////////////
+                ////////////////////////
                 sw_linq.Start();
 
                 //startpointからcountだけデータを切り取る
@@ -279,7 +410,7 @@ namespace GraphTest {
                 ///////////////////////
                 sw_linq.Stop();
 
-                StockData sd_temp = new StockData(dr_rows.Length);//一時変数は銘柄ごとに作り直し
+                OHLCSeries sd_temp = new OHLCSeries(dr_rows.Length);//一時変数は銘柄ごとに作り直し
 
                 ///////////////////////
                 sw_copy.Start();
@@ -295,11 +426,11 @@ namespace GraphTest {
                         return;
                     }
                     sd_temp.data[i].date = (DateTime)dr_rows[i]["Date"];
-                    sd_temp.data[i].open = Convert.ToInt32(dr_rows[i]["open"]);
-                    sd_temp.data[i].close = Convert.ToInt32(dr_rows[i]["close"]);
-                    sd_temp.data[i].high = Convert.ToInt32(dr_rows[i]["high"]);
-                    sd_temp.data[i].low = Convert.ToInt32(dr_rows[i]["low"]);
-                    sd_temp.data[i].adj_close = Convert.ToInt32(dr_rows[i]["adj_close"]);
+                    sd_temp.data[i].open = Convert.ToDouble(dr_rows[i]["open"]);
+                    sd_temp.data[i].close = Convert.ToDouble(dr_rows[i]["adj_close"]); //終値は修正後終値を使用
+                    sd_temp.data[i].high = Convert.ToDouble(dr_rows[i]["high"]);
+                    sd_temp.data[i].low = Convert.ToDouble(dr_rows[i]["low"]);
+                    sd_temp.data[i].adj_close = Convert.ToDouble(dr_rows[i]["adj_close"]);
                     sd_temp.data[i].volume = Convert.ToInt32(dr_rows[i]["volume"]);
                 }
                 ////////////////////////////////

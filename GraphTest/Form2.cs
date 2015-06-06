@@ -43,5 +43,12 @@ namespace GraphTest {
             dataGridView1.DataSource = CorpListManager.dtCache;
 
         }
+
+        private void dataGridView1_CellDoubleClick(object sender, DataGridViewCellEventArgs e) {
+            int code = CorpListManager.dtCache.Rows[e.RowIndex].Field<int>("corpCode");
+            var cc2 = new CandleChart2(code) { Size = new Size(780, 350), BackColor = Color.White };
+            this.AddOwnedForm(cc2);
+            cc2.Show();
+        }
     }
 }
